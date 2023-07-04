@@ -1,38 +1,80 @@
-import tkinter as tk
-from tkinter import filedialog
-from PIL import Image, ImageTk
+import sys
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QVBoxLayout, QLabel, QPushButton, QWidget
+from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtWidgets import QProgressDialog
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PIL import Image
 from PyPDF2 import PdfFileReader, PdfFileWriter
 from pdf2image import convert_from_path
 
+class PDFRotateThread(QThread):
+    rotation_done = pyqtSignal(str)
 
-class PDFRotator:
+    def __init__(self, pdf_path, rotation_angle):
+        super().__init__()
+        self.pdf_path = pdf_path
+        self.rotation_angle = rotation_angle
+
+    def run(self):
+        pdf_reader = PdfFileReader(self.pdf_path)
+        pdf_writer = PdfFileWriter()
+
+        for page in range(pdf_reader.getNumPages()):
+            page_obj = pdf_reader.getPage(page)
+            page_obj.rotateClockwise(self.rotation_angle)
+            pdf_writer.addPage(page_obj)
+
+        out_path = "rotated_" + self.pdf_path
+        with open(out_path, "wb") as out_file:
+            pdf_writer.write(out_file)
+
+        self.rotation_done.emit(out_path)
+
+
+class PDFRotator(QMainWindow):
     def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("PDF Rotator")
+        super().__init__()
 
-        self.canvas = tk.Canvas(self.window, width=600, height=600)
-        self.canvas.pack()
+        self.setWindowTitle("PDF Rotator")
 
-        self.select_button = tk.Button(self.window, text="Select PDF", command=self.load_pdf)
-        self.select_button.pack()
+        self.central_widget = QWidget()
+        self.layout = QVBoxLayout()
 
-        self.rotate_right_button = tk.Button(self.window, text="Rotate Right", command=lambda: self.rotate_image(270))
-        self.rotate_right_button.pack()
+        self.image_label = QLabel()
+        self.layout.addWidget(self.image_label)
 
-        self.rotate_left_button = tk.Button(self.window, text="Rotate Left", command=lambda: self.rotate_image(90))
-        self.rotate_left_button.pack()
+        self.select_button = QPushButton("Select PDF")
+        self.select_button.clicked.connect(self.load_pdf)
+        self.layout.addWidget(self.select_button)
 
-        self.done_button = tk.Button(self.window, text="Done", command=self.finalize_rotation)
-        self.done_button.pack()
+        self.rotate_right_button = QPushButton("Rotate Right")
+        self.rotate_right_button.clicked.connect(lambda: self.rotate_image(270))
+        self.layout.addWidget(self.rotate_right_button)
+
+        self.rotate_left_button = QPushButton("Rotate Left")
+        self.rotate_left_button.clicked.connect(lambda: self.rotate_image(90))
+        self.layout.addWidget(self.rotate_left_button)
+
+        self.done_button = QPushButton("Done")
+        self.done_button.clicked.connect(self.finalize_rotation)
+        self.layout.addWidget(self.done_button)
+
+        self.central_widget.setLayout(self.layout)
+        self.setCentralWidget(self.central_widget)
 
         self.pdf_path = None
         self.rotation_angle = 0
         self.pdf_image = None
 
     def load_pdf(self):
-        self.pdf_path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+        self.pdf_path, _ = QFileDialog.getOpenFileName(None, "Select PDF", "", "PDF files (*.pdf)")
         if self.pdf_path:
             self.rotation_angle = 0
+            self.progress_dialog = QProgressDialog("Loading PDF...", "", 0, 0, self)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.show()
+            QApplication.processEvents()
             self.display_pdf(self.pdf_path)
 
     def rotate_image(self, angle):
@@ -43,38 +85,31 @@ class PDFRotator:
 
     def finalize_rotation(self):
         if self.pdf_path and self.rotation_angle:
-            self.rotate_pdf(self.rotation_angle)
-            self.display_pdf(self.pdf_path)  # Resetting image to the original
+            self.thread = PDFRotateThread(self.pdf_path, self.rotation_angle)
+            self.thread.rotation_done.connect(self.rotation_finished)
+            self.thread.start()
 
-    def rotate_pdf(self, angle):
-        pdf_reader = PdfFileReader(self.pdf_path)
-        pdf_writer = PdfFileWriter()
-
-        for page in range(pdf_reader.getNumPages()):
-            page_obj = pdf_reader.getPage(page)
-            page_obj.rotateClockwise(angle)
-            pdf_writer.addPage(page_obj)
-
-        out_path = "rotated_" + self.pdf_path
-        with open(out_path, "wb") as out_file:
-            pdf_writer.write(out_file)
-
-        self.pdf_path = out_path
+    def rotation_finished(self, rotated_path):
+        self.pdf_path = rotated_path
+        self.display_pdf(rotated_path)
 
     def display_pdf(self, pdf_path):
         images = convert_from_path(pdf_path)
         self.pdf_image = images[0]
         self.display_image(self.pdf_image)
+        self.progress_dialog.close()
 
     def display_image(self, image):
-        image = ImageTk.PhotoImage(image)
-        self.canvas.create_image(300, 300, image=image)
-        self.canvas.image = image
+        qim = ImageQt(image).copy()
+        pix = QPixmap.fromImage(qim)
+        self.image_label.setPixmap(pix)
 
-    def run(self):
-        self.window.mainloop()
 
+def main():
+    app = QApplication(sys.argv)
+    rotator = PDFRotator()
+    rotator.show()
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    rotator = PDFRotator()
-    rotator.run()
+    main()
